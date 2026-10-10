@@ -14,6 +14,8 @@
 
 </div>
 
+> Nota: los inputs nuevos (`node_version`, `xcode_version`, `extra_env`), el secreto opcional `IPA_PASSPHRASE` y la compatibilidad con Xcode 26 estan documentados en el [README en ingles](README.md).
+
 ---
 
 ## El problema

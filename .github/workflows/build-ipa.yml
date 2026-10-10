@@ -1,55 +1,119 @@
 name: Build unsigned iOS IPA
 
+# Builds an UNSIGNED .ipa of an Expo / React Native app on GitHub's macOS runners, for free sideloading with
+# Sideloadly or AltStore (they sign it with your free Apple ID). See README.md.
+
 on:
   workflow_dispatch:
     inputs:
       repo:
-        description: "Repo a compilar (owner/nombre), ej: adro0303/mcqueens-web"
+        description: "Repository to build (owner/name), e.g. anazhd/captioncam"
         required: true
       ref:
-        description: "Rama, tag o commit"
+        description: "Branch, tag or commit"
         required: false
         default: "main"
       app_dir:
-        description: "Carpeta dentro del repo donde esta el proyecto Expo (usa . si esta en la raiz)"
+        description: "Folder inside the repo that holds the Expo project (use . for the repo root)"
         required: false
         default: "."
       ipa_name:
-        description: "Nombre del artefacto .ipa resultante"
+        description: "Name of the resulting .ipa artifact (without extension)"
         required: false
         default: "app-unsigned"
+      node_version:
+        description: "Node.js version for the build"
+        required: false
+        default: "22"
+      xcode_version:
+        description: "Xcode to use, e.g. 26.6. Empty = the newest Xcode 26.x on the runner"
+        required: false
+        default: ""
+      extra_env:
+        description: "Extra environment variables for the whole build, one KEY=VALUE per line"
+        required: false
+        default: ""
+
+permissions:
+  contents: read
 
 jobs:
   build:
+    # macos-latest is macOS 26 on Apple silicon, which ships Xcode 26 (needed for iOS 26 SDK projects).
     runs-on: macos-latest
-    timeout-minutes: 45
+    timeout-minutes: 75
+    env:
+      CI: "1"
+      EXPO_NO_TELEMETRY: "1"
+      # Optional. When set, the .ipa and build log are encrypted before upload (see README).
+      IPA_PASSPHRASE: ${{ secrets.IPA_PASSPHRASE }}
+    defaults:
+      run:
+        working-directory: target/${{ inputs.app_dir }}
     steps:
+      - name: Warn if artifacts would be public
+        working-directory: ${{ github.workspace }}
+        run: |
+          if [ "${{ github.event.repository.private }}" = "false" ] && [ -z "${IPA_PASSPHRASE}" ]; then
+            echo "::warning title=This repository is public::Build logs are public, and any signed-in GitHub user can download the artifacts of a public repository. If the app you build is private, make this repository private or set the IPA_PASSPHRASE secret to encrypt the artifacts."
+          fi
+
       - name: Checkout target project
         uses: actions/checkout@v4
         with:
           repository: ${{ inputs.repo }}
           ref: ${{ inputs.ref }}
-          token: ${{ secrets.CROSS_REPO_TOKEN }}
+          # Needed for private repos. For public repos it can be left unset.
+          token: ${{ secrets.CROSS_REPO_TOKEN || github.token }}
           path: target
 
       - uses: actions/setup-node@v4
         with:
-          node-version: 20
+          node-version: ${{ inputs.node_version }}
 
-      - name: Select latest available Xcode
+      - name: Select Xcode
+        working-directory: ${{ github.workspace }}
+        env:
+          XCODE_VERSION: ${{ inputs.xcode_version }}
         run: |
-          ls /Applications | grep -i Xcode
-          LATEST=$(ls -d /Applications/Xcode*.app | sort -V | tail -n1)
-          sudo xcode-select -s "$LATEST"
+          ls -d /Applications/Xcode*.app
+          if [ -n "$XCODE_VERSION" ]; then
+            APP="/Applications/Xcode_${XCODE_VERSION}.app"
+          else
+            APP=$(ls -d /Applications/Xcode_26*.app 2>/dev/null | sort -V | tail -n1)
+          fi
+          if [ -z "$APP" ] || [ ! -d "$APP" ]; then
+            APP=$(ls -d /Applications/Xcode*.app | sort -V | tail -n1)
+          fi
+          echo "Using $APP"
+          sudo xcode-select -s "$APP"
           xcodebuild -version
+          echo "iPhoneOS SDK: $(xcrun --sdk iphoneos --show-sdk-version)"
+
+      - name: Apply extra environment variables
+        env:
+          EXTRA_ENV: ${{ inputs.extra_env }}
+        run: |
+          [ -z "$EXTRA_ENV" ] && exit 0
+          while IFS= read -r line || [ -n "$line" ]; do
+            line="${line%$'\r'}"
+            [ -z "$line" ] && continue
+            case "$line" in
+              [A-Za-z_]*=*) echo "$line" >> "$GITHUB_ENV"; echo "Set ${line%%=*}" ;;
+              *) echo "::error::Ignoring invalid extra_env line (expected KEY=VALUE)"; exit 1 ;;
+            esac
+          done <<< "$EXTRA_ENV"
 
       - name: Install JS dependencies
-        working-directory: target/${{ inputs.app_dir }}
-        run: npm install
+        run: |
+          if [ -f package-lock.json ]; then
+            npm ci
+          else
+            npm install
+          fi
 
       - name: Prebuild native iOS project
-        working-directory: target/${{ inputs.app_dir }}
-        run: npx expo prebuild --platform ios --non-interactive
+        run: npx expo prebuild --platform ios --no-install
 
       - name: Install CocoaPods dependencies
         working-directory: target/${{ inputs.app_dir }}/ios
@@ -57,7 +121,6 @@ jobs:
 
       - name: Find workspace and scheme
         id: target_scheme
-        working-directory: target/${{ inputs.app_dir }}
         run: |
           WORKSPACE=$(ls -d ios/*.xcworkspace | head -n1)
           PROJECT=$(ls -d ios/*.xcodeproj | head -n1)
@@ -65,12 +128,12 @@ jobs:
           echo "workspace=$WORKSPACE" >> "$GITHUB_OUTPUT"
           echo "scheme=$SCHEME" >> "$GITHUB_OUTPUT"
           echo "Workspace: $WORKSPACE / Scheme: $SCHEME"
-          echo "All schemes in workspace (for reference):"
           xcodebuild -list -workspace "$WORKSPACE"
 
       - name: Build (unsigned)
-        working-directory: target/${{ inputs.app_dir }}
         run: |
+          mkdir -p build
+          set +e
           xcodebuild \
             -workspace "${{ steps.target_scheme.outputs.workspace }}" \
             -scheme "${{ steps.target_scheme.outputs.scheme }}" \
@@ -83,26 +146,120 @@ jobs:
             CODE_SIGN_IDENTITY="" \
             CODE_SIGN_ENTITLEMENTS="" \
             AD_HOC_CODE_SIGNING_ALLOWED=YES \
-            build
+            COMPILER_INDEX_STORE_ENABLE=NO \
+            build > build/xcodebuild.log 2>&1
+          STATUS=$?
+          set -e
+          echo "xcodebuild exit status: $STATUS"
+          if [ $STATUS -ne 0 ]; then
+            echo "---- Errors (full log is in the build-log artifact) ----"
+            grep -E "error:|\*\* BUILD FAILED|The following build commands failed" build/xcodebuild.log | sort -u | head -80 || true
+            exit $STATUS
+          fi
+          tail -n 5 build/xcodebuild.log
 
       - name: Package unsigned IPA
-        working-directory: target/${{ inputs.app_dir }}
+        id: package
+        env:
+          IPA_NAME: ${{ inputs.ipa_name }}
         run: |
-          echo "Build products:"
-          find build/DerivedData/Build/Products -maxdepth 2
           APP_PATH=$(find build/DerivedData/Build/Products -maxdepth 2 -name "*.app" -type d | head -n1)
           if [ -z "$APP_PATH" ]; then
             echo "No .app bundle found in build products"
+            find build/DerivedData/Build/Products -maxdepth 2
             exit 1
           fi
           echo "Found app: $APP_PATH"
-          mkdir -p build/Payload
-          cp -r "$APP_PATH" build/Payload/
-          cd build
-          zip -r "${{ inputs.ipa_name }}.ipa" Payload
 
-      - uses: actions/upload-artifact@v4
+          PLIST="$APP_PATH/Info.plist"
+          EXECUTABLE=$(/usr/libexec/PlistBuddy -c "Print :CFBundleExecutable" "$PLIST")
+          BUNDLE_ID=$(/usr/libexec/PlistBuddy -c "Print :CFBundleIdentifier" "$PLIST")
+          MIN_OS=$(/usr/libexec/PlistBuddy -c "Print :MinimumOSVersion" "$PLIST" 2>/dev/null || echo "?")
+          echo "Bundle id: $BUNDLE_ID  Minimum iOS: $MIN_OS"
+          lipo -info "$APP_PATH/$EXECUTABLE"
+          if [ -d "$APP_PATH/Frameworks" ]; then echo "Embedded frameworks:"; ls "$APP_PATH/Frameworks"; fi
+
+          rm -rf build/Payload
+          mkdir -p build/Payload
+          cp -R "$APP_PATH" build/Payload/
+          (cd build && zip -qry "$IPA_NAME.ipa" Payload && rm -rf Payload)
+          SIZE=$(du -h "build/$IPA_NAME.ipa" | cut -f1)
+          echo "Built build/$IPA_NAME.ipa ($SIZE)"
+          echo "bundle_id=$BUNDLE_ID" >> "$GITHUB_OUTPUT"
+          echo "min_os=$MIN_OS" >> "$GITHUB_OUTPUT"
+          echo "size=$SIZE" >> "$GITHUB_OUTPUT"
+
+      - name: Choose upload files (encrypt if IPA_PASSPHRASE is set)
+        id: upload
+        env:
+          IPA_NAME: ${{ inputs.ipa_name }}
+        run: |
+          if [ -n "${IPA_PASSPHRASE}" ]; then
+            openssl enc -aes-256-cbc -pbkdf2 -iter 200000 -salt -pass env:IPA_PASSPHRASE \
+              -in "build/$IPA_NAME.ipa" -out "build/$IPA_NAME.ipa.enc"
+            rm "build/$IPA_NAME.ipa"
+            echo "file=build/$IPA_NAME.ipa.enc" >> "$GITHUB_OUTPUT"
+            echo "encrypted=true" >> "$GITHUB_OUTPUT"
+            if [ -f build/xcodebuild.log ]; then
+              openssl enc -aes-256-cbc -pbkdf2 -iter 200000 -salt -pass env:IPA_PASSPHRASE \
+                -in build/xcodebuild.log -out build/xcodebuild.log.enc
+              rm build/xcodebuild.log
+            fi
+          else
+            echo "file=build/$IPA_NAME.ipa" >> "$GITHUB_OUTPUT"
+            echo "encrypted=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Job summary
+        env:
+          IPA_NAME: ${{ inputs.ipa_name }}
+          BUNDLE_ID: ${{ steps.package.outputs.bundle_id }}
+          MIN_OS: ${{ steps.package.outputs.min_os }}
+          SIZE: ${{ steps.package.outputs.size }}
+          ENCRYPTED: ${{ steps.upload.outputs.encrypted }}
+          TARGET_REPO: ${{ inputs.repo }}
+          TARGET_REF: ${{ inputs.ref }}
+        working-directory: ${{ github.workspace }}
+        run: |
+          {
+            echo "## Unsigned IPA ready"
+            echo
+            echo "| | |"
+            echo "|---|---|"
+            echo "| Source | \`$TARGET_REPO\` @ \`$TARGET_REF\` |"
+            echo "| Bundle id | \`$BUNDLE_ID\` |"
+            echo "| Minimum iOS | $MIN_OS |"
+            echo "| Size | $SIZE |"
+            echo
+            echo "Download it from **Artifacts** below (or \`gh run download ${{ github.run_id }} --repo ${{ github.repository }}\`)."
+            if [ "$ENCRYPTED" = "true" ]; then
+              echo
+              echo "The artifact is encrypted. Decrypt with your passphrase:"
+              echo
+              echo '```bash'
+              echo "openssl enc -d -aes-256-cbc -pbkdf2 -iter 200000 -in $IPA_NAME.ipa.enc -out $IPA_NAME.ipa"
+              echo '```'
+            fi
+            echo
+            echo "Then open the \`.ipa\` in **Sideloadly** or **AltStore** and sign it with your free Apple ID."
+            echo "Free signatures last 7 days."
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload IPA
+        uses: actions/upload-artifact@v4
         with:
           name: ${{ inputs.ipa_name }}
-          path: target/${{ inputs.app_dir }}/build/${{ inputs.ipa_name }}.ipa
+          path: target/${{ inputs.app_dir }}/${{ steps.upload.outputs.file }}
           retention-days: 14
+          if-no-files-found: error
+
+      - name: Upload build log (on failure)
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ inputs.ipa_name }}-build-log
+          path: |
+            target/${{ inputs.app_dir }}/build/xcodebuild.log
+            target/${{ inputs.app_dir }}/build/xcodebuild.log.enc
+          retention-days: 7
+          if-no-files-found: ignore

@@ -79,24 +79,45 @@ is one readable file: [`.github/workflows/build-ipa.yml`](.github/workflows/buil
 
 - A GitHub account with the [`gh` CLI](https://cli.github.com/) installed and authenticated (`gh auth login`).
 - An Expo/React Native project in a GitHub repo (yours or one you have access to), with `app.json` configured (`ios.bundleIdentifier` set).
-- Fork this repo (or copy it) to your own account.
+- This repo (or your fork of it).
+- On the phone: [Sideloadly](https://sideloadly.io/) or [AltStore](https://altstore.io/) to sign and install the `.ipa` with a free Apple ID.
+
+The runner is `macos-latest` (macOS 26, Apple silicon, Xcode 26.x), so projects that need the **iOS 26 SDK** build out of the box.
 
 ## 🔑 One-time setup
 
+### 1. `CROSS_REPO_TOKEN` (needed for private app repos)
+
 The workflow needs permission to read the repo you want to build (even if
-private) using its own token — the default `GITHUB_TOKEN` only has access to
-the repo the workflow itself lives in.
+private) using its own token. The default `GITHUB_TOKEN` only has access to
+the repo the workflow itself lives in. For a public app repo you can skip this.
 
 1. Go to [github.com/settings/tokens?type=beta](https://github.com/settings/tokens?type=beta) → **Generate new token** (fine-grained).
 2. Name it, e.g. `ipa-builder-checkout`.
 3. Under **Repository access** → **Only select repositories**, check the repos you want to build.
 4. Under **Permissions → Repository permissions**, set **Contents: Read-only**. Nothing else needed.
 5. Generate the token and copy it (shown once).
-6. In your terminal, inside your copy of this repo:
+6. In your terminal:
 
    ```bash
    gh secret set CROSS_REPO_TOKEN --repo YOUR-USERNAME/ipa-builder
    ```
+
+### 2. `IPA_PASSPHRASE` (recommended if this repo is public)
+
+Workflow logs of a **public** repository are public, and any signed-in GitHub user can download a public repository's artifacts. If the app you build is private, either make `ipa-builder` private or set a passphrase so the `.ipa` and the build log are encrypted (AES-256, PBKDF2) before upload:
+
+```bash
+gh secret set IPA_PASSPHRASE --repo YOUR-USERNAME/ipa-builder
+```
+
+Decrypt after downloading:
+
+```bash
+openssl enc -d -aes-256-cbc -pbkdf2 -iter 200000 -in my-app-unsigned.ipa.enc -out my-app-unsigned.ipa
+```
+
+The run prints a warning when the repo is public and no passphrase is set. A private `ipa-builder` repo avoids the problem but its macOS minutes are billed at 10x against the free allowance (the free plan has 2,000 minutes a month, i.e. 200 macOS minutes).
 
 ## 🚀 Usage
 
@@ -108,27 +129,58 @@ gh workflow run build-ipa.yml --repo YOUR-USERNAME/ipa-builder \
   -f ipa_name=my-app-unsigned
 ```
 
-| Input | Meaning |
-|---|---|
-| `repo` | `owner/name` of the repo containing the app you want to build |
-| `ref` | Branch, tag, or commit (defaults to `main`) |
-| `app_dir` | Folder with `package.json`/`app.json` (`.` if repo root) |
-| `ipa_name` | Name for the resulting `.ipa` |
+| Input | Meaning | Default |
+|---|---|---|
+| `repo` | `owner/name` of the repo containing the app (required) | |
+| `ref` | Branch, tag, or commit | `main` |
+| `app_dir` | Folder with `package.json`/`app.json` (`.` if repo root) | `.` |
+| `ipa_name` | Name for the resulting `.ipa` | `app-unsigned` |
+| `node_version` | Node.js version used for the build | `22` |
+| `xcode_version` | Xcode to use, e.g. `26.6`. Empty picks the newest Xcode 26.x | empty |
+| `extra_env` | Extra environment variables, one `KEY=VALUE` per line | empty |
 
-Prefer clicking? Go to the **Actions** tab of your copy of this repo →
-**Build unsigned iOS IPA** → **Run workflow**, and fill in the same fields.
+Follow a run and download the result from the terminal:
 
-When it finishes (~10-15 min), open that run → **Artifacts** → download the `.ipa`.
+```bash
+gh run watch --repo YOUR-USERNAME/ipa-builder          # pick the latest run
+gh run download --repo YOUR-USERNAME/ipa-builder -n my-app-unsigned
+```
+
+Prefer clicking? Go to the **Actions** tab → **Build unsigned iOS IPA** → **Run workflow**, and fill in the same fields.
+
+When it finishes (about 15-40 min for large native apps), open that run → **Artifacts** → download the `.ipa`. The run summary lists the bundle id, minimum iOS and size.
+
+### Example: CaptionCam (Swift native modules, iOS 26)
+
+```bash
+gh workflow run build-ipa.yml --repo anazhd/ipa-builder \
+  -f repo=anazhd/captioncam -f ref=main -f app_dir=. -f ipa_name=captioncam-unsigned
+```
+
+If its Apple Intelligence code ever fails to compile on a new Xcode, add `-f extra_env=CAPTIONCAM_DISABLE_FOUNDATION_MODELS=1`.
+
+## 🔧 What the workflow does
+
+1. Warns if artifacts would be public without a passphrase.
+2. Checks out the target repo, sets up Node, selects Xcode 26.
+3. Runs `npm ci` (or `npm install` with no lockfile), so the project's own install scripts run (CaptionCam downloads its Whisper framework here).
+4. `npx expo prebuild --platform ios --no-install`, then `pod install`.
+5. `xcodebuild` in Release for `generic/platform=iOS` with code signing off. The full log goes to a file; if the build fails, the error lines are printed and the whole log is uploaded as a `<ipa_name>-build-log` artifact.
+6. Checks the bundle (id, minimum iOS, architecture, embedded frameworks), zips it into `Payload/` to make the `.ipa`, optionally encrypts, and uploads it.
 
 ## 💡 Good to know
 
 | | |
 |---|---|
-| **Not signed by Apple** | Intentional — Sideloadly/AltStore sign it with your free Apple ID at install time |
+| **Not signed by Apple** | Intentional: Sideloadly/AltStore sign it with your free Apple ID at install time |
+| **Entitlements** | The app must not need capabilities a free account cannot grant (push, iCloud, App Groups, and so on). CaptionCam needs none |
 | **7-day expiry** | Free Apple signatures stop working after 7 days unless refreshed via Sideloadly/AltServer |
-| **macOS runner cost** | Counts 10× against your GitHub Actions free-tier minutes |
+| **Device limits** | A free Apple ID can have 3 sideloaded apps at once and a few new app IDs per week |
+| **macOS runner cost** | Free for public repos; counts 10x against the free-tier minutes for private repos |
 | **Artifact TTL** | Downloads expire after 14 days (GitHub Actions limit) |
-| **Access errors** | If `Checkout target project` fails with a permissions error, the token doesn't have access to that repo |
+| **Release build** | The JS bundle is embedded, so the app runs without a dev server |
+| **Access errors** | If `Checkout target project` fails with a permissions error, the token does not have access to that repo |
+| **Build errors** | Open the `<ipa_name>-build-log` artifact; search for `error:` |
 
 ---
 
