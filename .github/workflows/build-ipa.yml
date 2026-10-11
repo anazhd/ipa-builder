@@ -22,13 +22,13 @@ on:
         required: false
         default: "app-unsigned"
       runner:
-        description: "macOS runner. macos-latest = macOS 26 + Xcode 26 (iOS 26 SDK). xcode-27 = macOS 27 + Xcode 27 (iOS 27 SDK, preview image)"
+        description: "macOS runner. xcode-27 = macOS 27 + Xcode 27 (iOS 27 SDK, preview image). macos-latest = macOS 26 + Xcode 26 (iOS 26 SDK)"
         type: choice
         required: false
-        default: "macos-latest"
+        default: "xcode-27"
         options:
-          - macos-latest
           - xcode-27
+          - macos-latest
       node_version:
         description: "Node.js version for the build"
         required: false

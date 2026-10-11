@@ -82,7 +82,7 @@ is one readable file: [`.github/workflows/build-ipa.yml`](.github/workflows/buil
 - This repo (or your fork of it).
 - On the phone: [Sideloadly](https://sideloadly.io/) or [AltStore](https://altstore.io/) to sign and install the `.ipa` with a free Apple ID.
 
-The default runner is `macos-latest` (macOS 26, Apple silicon, Xcode 26.x), so projects that need the **iOS 26 SDK** build out of the box. Set the `runner` input to `xcode-27` for macOS 27 with Xcode 27 and the **iOS 27 SDK** (a GitHub preview image, so expect occasional queueing).
+The default runner is `xcode-27` (macOS 27, Xcode 27, **iOS 27 SDK**; a GitHub preview image, so expect occasional queueing). Set the `runner` input to `macos-latest` for macOS 26 with Xcode 26.x and the **iOS 26 SDK**.
 
 ## 🔑 One-time setup
 
@@ -136,7 +136,7 @@ gh workflow run build-ipa.yml --repo YOUR-USERNAME/ipa-builder \
 | `app_dir` | Folder with `package.json`/`app.json` (`.` if repo root) | `.` |
 | `ipa_name` | Name for the resulting `.ipa` | `app-unsigned` |
 | `node_version` | Node.js version used for the build | `22` |
-| `runner` | `macos-latest` (macOS 26, Xcode 26) or `xcode-27` (macOS 27, Xcode 27) | `macos-latest` |
+| `runner` | `xcode-27` (macOS 27, Xcode 27) or `macos-latest` (macOS 26, Xcode 26) | `xcode-27` |
 | `xcode_version` | Xcode to use, e.g. `27.1`. Empty uses the runner image's default Xcode | empty |
 | `extra_env` | Extra environment variables, one `KEY=VALUE` per line | empty |
 
