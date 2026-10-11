@@ -67,6 +67,11 @@ jobs:
           token: ${{ secrets.CROSS_REPO_TOKEN || github.token }}
           path: target
 
+      - name: Resolve absolute project path
+        id: dirs
+        # upload-artifact rejects "." in paths, so avoid target/./build when app_dir is "."
+        run: echo "root=$(pwd)" >> "$GITHUB_OUTPUT"
+
       - uses: actions/setup-node@v4
         with:
           node-version: ${{ inputs.node_version }}
@@ -249,7 +254,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: ${{ inputs.ipa_name }}
-          path: target/${{ inputs.app_dir }}/${{ steps.upload.outputs.file }}
+          path: ${{ steps.dirs.outputs.root }}/${{ steps.upload.outputs.file }}
           retention-days: 14
           if-no-files-found: error
 
@@ -259,7 +264,7 @@ jobs:
         with:
           name: ${{ inputs.ipa_name }}-build-log
           path: |
-            target/${{ inputs.app_dir }}/build/xcodebuild.log
-            target/${{ inputs.app_dir }}/build/xcodebuild.log.enc
+            ${{ steps.dirs.outputs.root }}/build/xcodebuild.log
+            ${{ steps.dirs.outputs.root }}/build/xcodebuild.log.enc
           retention-days: 7
           if-no-files-found: ignore
