@@ -1,0 +1,68 @@
+name: Inspect Apple SDK API
+
+# Read-only helper: prints the Swift declarations that match a pattern from a system framework's swiftinterface in the
+# selected Xcode's iPhoneOS SDK. Used to verify the exact signature of an API before writing code against it.
+# Only matching lines (plus a little context) are printed, never whole files.
+
+on:
+  workflow_dispatch:
+    inputs:
+      runner:
+        description: "macos-latest (Xcode 26) or xcode-27"
+        type: choice
+        default: "xcode-27"
+        options:
+          - xcode-27
+          - macos-latest
+      framework:
+        description: "Framework name, e.g. FoundationModels or Speech"
+        required: true
+      pattern:
+        description: "Extended regex (grep -E, case-insensitive). One per line to run several."
+        required: true
+      context:
+        description: "Lines of context after each match"
+        required: false
+        default: "2"
+
+permissions:
+  contents: read
+
+jobs:
+  inspect:
+    runs-on: ${{ inputs.runner }}
+    timeout-minutes: 10
+    steps:
+      - name: Show toolchain
+        run: |
+          xcodebuild -version
+          echo "SDK: $(xcrun --sdk iphoneos --show-sdk-version) at $(xcrun --sdk iphoneos --show-sdk-path)"
+
+      - name: Find interface files
+        id: find
+        env:
+          FW: ${{ inputs.framework }}
+        run: |
+          SDK=$(xcrun --sdk iphoneos --show-sdk-path)
+          DIR="$SDK/System/Library/Frameworks/$FW.framework"
+          [ -d "$DIR" ] || DIR="$SDK/System/Library/PrivateFrameworks/$FW.framework"
+          echo "framework dir: $DIR"
+          find "$DIR" \( -name '*.swiftinterface' -o -name '*.swiftmodule' \) | sort
+          FILE=$(find "$DIR" -name 'arm64*.swiftinterface' ! -name '*private*' | head -n1)
+          [ -n "$FILE" ] || FILE=$(find "$DIR" -name '*.swiftinterface' ! -name '*private*' | head -n1)
+          echo "using: $FILE"
+          echo "file=$FILE" >> "$GITHUB_OUTPUT"
+
+      - name: Matching declarations
+        env:
+          FILE: ${{ steps.find.outputs.file }}
+          PATTERNS: ${{ inputs.pattern }}
+          CTX: ${{ inputs.context }}
+        run: |
+          [ -n "$FILE" ] || { echo "::error::no swiftinterface found"; exit 1; }
+          echo "$PATTERNS" | while IFS= read -r P; do
+            [ -n "$P" ] || continue
+            echo
+            echo "=============== $P"
+            grep -n -i -E -A "$CTX" -- "$P" "$FILE" | head -n 150 || echo "(no match)"
+          done
