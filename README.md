@@ -82,7 +82,7 @@ is one readable file: [`.github/workflows/build-ipa.yml`](.github/workflows/buil
 - This repo (or your fork of it).
 - On the phone: [Sideloadly](https://sideloadly.io/) or [AltStore](https://altstore.io/) to sign and install the `.ipa` with a free Apple ID.
 
-The runner is `macos-latest` (macOS 26, Apple silicon, Xcode 26.x), so projects that need the **iOS 26 SDK** build out of the box.
+The default runner is `macos-latest` (macOS 26, Apple silicon, Xcode 26.x), so projects that need the **iOS 26 SDK** build out of the box. Set the `runner` input to `xcode-27` for macOS 27 with Xcode 27 and the **iOS 27 SDK** (a GitHub preview image, so expect occasional queueing).
 
 ## 🔑 One-time setup
 
@@ -136,7 +136,8 @@ gh workflow run build-ipa.yml --repo YOUR-USERNAME/ipa-builder \
 | `app_dir` | Folder with `package.json`/`app.json` (`.` if repo root) | `.` |
 | `ipa_name` | Name for the resulting `.ipa` | `app-unsigned` |
 | `node_version` | Node.js version used for the build | `22` |
-| `xcode_version` | Xcode to use, e.g. `26.6`. Empty picks the newest Xcode 26.x | empty |
+| `runner` | `macos-latest` (macOS 26, Xcode 26) or `xcode-27` (macOS 27, Xcode 27) | `macos-latest` |
+| `xcode_version` | Xcode to use, e.g. `27.1`. Empty uses the runner image's default Xcode | empty |
 | `extra_env` | Extra environment variables, one `KEY=VALUE` per line | empty |
 
 Follow a run and download the result from the terminal:
@@ -162,7 +163,7 @@ If its Apple Intelligence code ever fails to compile on a new Xcode, add `-f ext
 ## 🔧 What the workflow does
 
 1. Warns if artifacts would be public without a passphrase.
-2. Checks out the target repo, sets up Node, selects Xcode 26.
+2. Checks out the target repo, sets up Node, selects the runner's default Xcode.
 3. Runs `npm ci` (or `npm install` with no lockfile), so the project's own install scripts run (CaptionCam downloads its Whisper framework here).
 4. `npx expo prebuild --platform ios --no-install`, then `pod install`.
 5. `xcodebuild` in Release for `generic/platform=iOS` with code signing off. The full log goes to a file; if the build fails, the error lines are printed and the whole log is uploaded as a `<ipa_name>-build-log` artifact.
