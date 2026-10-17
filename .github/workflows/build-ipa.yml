@@ -30,9 +30,9 @@ on:
           - xcode-27
           - macos-latest
       node_version:
-        description: "Node.js version for the build"
+        description: "Node.js version for the build (override for projects requiring another major)"
         required: false
-        default: "22"
+        default: "26"
       xcode_version:
         description: "Xcode to use, e.g. 27.1. Empty = the runner image's default Xcode"
         required: false

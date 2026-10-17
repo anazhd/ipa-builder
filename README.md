@@ -135,7 +135,7 @@ gh workflow run build-ipa.yml --repo YOUR-USERNAME/ipa-builder \
 | `ref` | Branch, tag, or commit | `main` |
 | `app_dir` | Folder with `package.json`/`app.json` (`.` if repo root) | `.` |
 | `ipa_name` | Name for the resulting `.ipa` | `app-unsigned` |
-| `node_version` | Node.js version used for the build | `22` |
+| `node_version` | Node.js version used for the build (override for older projects) | `26` |
 | `runner` | `xcode-27` (macOS 27, Xcode 27) or `macos-latest` (macOS 26, Xcode 26) | `xcode-27` |
 | `xcode_version` | Xcode to use, e.g. `27.1`. Empty uses the runner image's default Xcode | empty |
 | `extra_env` | Extra environment variables, one `KEY=VALUE` per line | empty |
